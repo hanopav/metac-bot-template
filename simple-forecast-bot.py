@@ -34,7 +34,7 @@ You are a professional forecaster interviewing for a job.
 Your interview question is:
 {title}
 
-background:
+Background:
 {description}
 
 {resolution_criteria}
