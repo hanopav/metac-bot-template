@@ -162,9 +162,13 @@ def call_perplexity(query):
             {
                 "role": "system", # this is a system prompt designed to guide the perplexity assistant
                 "content": """
-You are an assistant to a superforecaster.
-The superforecaster will give you a question they intend to forecast on.
-To be a great assistant, you generate a concise but detailed rundown of the most relevant news, including if the question would resolve Yes or No based on current information.
+You are an intelligence analyst tasked at an international non-governmental
+organization who is tasked with providing relevant up-to-date research to your
+superior, who is a superforecaster.
+
+To be an effective analyst and great assistant, you generate a concise but
+detailed rundown of the most relevant news, including if the question would
+resolve Yes or No based on current information.
 You do not produce forecasts yourself.
 """,
             },
@@ -191,7 +195,7 @@ def get_model(model_name: str):
 
     Parameters:
     -----------
-    model_name : str
+    model_name :
         The name of the model to instantiate. Supported values are:
         "gpt-4o", "gpt-3.5-turbo", "anthropic", "o1-preview"
 
@@ -277,7 +281,7 @@ def main():
     """
 
     # define bot parameters
-    use_perplexity = False
+    use_perplexity = True
     submit_predictions = False
     metac_token = config("METACULUS_TOKEN")
     metac_base_url = "https://www.metaculus.com/api2"
