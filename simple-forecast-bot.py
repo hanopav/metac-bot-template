@@ -55,7 +55,7 @@ supported by a quick overview of the available information your previous
 research on the topic has shown.
 
 You can't know the future, and your superior knows that, so it is more important
- to given an honest estimate that reflects the available evidence.You do not
+ to give an honest estimate that reflects the available evidence.You do not
  hedge your uncertainty, but try to give the most likely point estimate for the
  event in question happening. Remember to make sure that your point estimate
  accurately reflects your research and analysis.
@@ -94,7 +94,7 @@ You write your rationale and then the last thing you write is your final answer 
 
     return prompt
 
-def process_forecast_probabilty(forecast_text: str):
+def process_forecast_probability(forecast_text: str):
     """
     Extract the forecast probability from the forecast text and clamp it between 1 and 99.
     """
@@ -210,10 +210,7 @@ You do not produce forecasts yourself.
     response = requests.post(url=url, json=payload, headers=headers)
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"]
-    print(
-        f"\n\nCalled perplexity with:\n----\n{json.dumps(payload)}\n---\n, and got\n:",
-        content,
-    )
+    print(f"Response: \n{content}")
     return content
 
 
@@ -354,9 +351,11 @@ def main():
         response = llm_model.chat(
             messages=[ChatMessage(role=MessageRole.USER, content=prompt)]
         )
-        llm_prediction = process_forecast_probabilty(response.message.content)
+
+        llm_prediction = process_forecast_probability(response.message.content)
         rationale = response.message.content
 
+        print(f"LLM Response for question {question['id']}:\n{response.message.content}")
 
         if llm_prediction is not None and submit_predictions:
 
