@@ -162,6 +162,40 @@ def list_questions(base_url: str, metac_token: str, tournament_id: int, offset=0
     data = json.loads(response.content)
     return data["results"]
 
+def call_metaculus_proxy(prompt: str, metac_token: str):
+    """
+    Call the Metaculus proxy API to generate a completion using GPT-3.5 Turbo model.
+    
+    Parameters:
+    -----------
+    prompt : str
+        The prompt to send to the proxy API.
+    metac_token : str
+        The Metaculus token to authenticate with the proxy.
+
+    Returns:
+    --------
+    str
+        The response content from the assistant.
+    """
+    url = "https://www.metaculus.com/proxy/openai/v1/chat/completions/"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Token {metac_token}",
+    }
+    
+    payload = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+    }
+
+    response = requests.post(url=url, json=payload, headers=headers)
+    response.raise_for_status()  # Throw an error if the request fails
+    content = response.json()["choices"][0]["message"]["content"]
+    return content
 
 def call_perplexity(query):
     """
@@ -214,7 +248,7 @@ You do not produce forecasts yourself.
     return content
 
 
-def get_model(model_name: str):
+def get_model(model_name: str, metac_token: str):
     """
     Get the appropriate language model based on the provided model name.
     This uses the classes provided by the llama-index library.
@@ -236,6 +270,10 @@ def get_model(model_name: str):
     stored in a file called ".env", which will be accessed using the
     `config` function from the decouple library.
     """
+    if model_name == "gpt-4o":
+        return lambda prompt: call_metaculus_proxy(prompt, metac_token)
+    else:
+        raise ValueError("We want to use only 'gpt-4o' via Metaculus proxy.")
 
     match model_name:
         case "gpt-4o":
@@ -346,16 +384,14 @@ def main():
         )
 
         # get the language model to be used based on the name of the model
-        llm_model = get_model(llm_model_name)
+        llm_model = get_model(llm_model_name, metac_token)
         # make a call to the language model
-        response = llm_model.chat(
-            messages=[ChatMessage(role=MessageRole.USER, content=prompt)]
-        )
+        response = llm_model(prompt)
 
-        llm_prediction = process_forecast_probability(response.message.content)
-        rationale = response.message.content
+        llm_prediction = process_forecast_probability(response)
+        rationale = response
 
-        print(f"LLM Response for question {question['id']}:\n{response.message.content}")
+        print(f"LLM Response for question {question['id']}:\n{response}")
 
         if llm_prediction is not None and submit_predictions:
 
