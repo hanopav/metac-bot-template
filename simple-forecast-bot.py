@@ -108,7 +108,7 @@ def process_forecast_probability(forecast_text: str):
         return None
 
 
-def list_questions(base_url: str, metac_token: str, tournament_id: int, offset=0, count=10):
+def list_questions(base_url: str, metac_token: str, tournament_id: int, offset=0, count=1):
     """
     List questions from a specific tournament. This uses the questions
     endpoint and queries it for questions belonging to a specific tournament.

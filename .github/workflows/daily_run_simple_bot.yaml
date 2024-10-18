@@ -39,3 +39,27 @@ jobs:
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }} # replace this with the name of the variable under which you stored your own Metaculus token
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+        # Send Gmail Notification
+      - name: Send Email Notification
+        if: success() || failure()
+        run: |
+          curl --request POST \
+          --url https://api.sendgrid.com/v3/mail/send \
+          --header "Authorization: Bearer ${{ secrets.SENDGRID_API_KEY }}" \
+          --header 'Content-Type: application/json' \
+          --data '{
+            "personalizations": [{
+              "to": [{
+                "email": "pavel.hanosek@ceskepriority.cz"
+              }],
+              "subject": "GitHub Action: Bot Execution Status"
+            }],
+            "from": {
+              "email": "pavel.hanosek@ceskepriority.cz"
+            },
+            "content": [{
+              "type": "text/plain",
+              "value": "The simple forecast bot has finished running. Status: ${{ job.status }}."
+            }]
+          }'
