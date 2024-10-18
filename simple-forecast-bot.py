@@ -108,7 +108,7 @@ def process_forecast_probability(forecast_text: str):
         return None
 
 
-def list_questions(base_url: str, metac_token: str, tournament_id: int, offset=0, count=1):
+def list_questions(base_url: str, metac_token: str, tournament_id: int, offset=0, count=10):
     """
     List questions from a specific tournament. This uses the questions
     endpoint and queries it for questions belonging to a specific tournament.
@@ -164,7 +164,7 @@ def list_questions(base_url: str, metac_token: str, tournament_id: int, offset=0
 
 def call_metaculus_proxy(prompt: str, metac_token: str):
     """
-    Call the Metaculus proxy API to generate a completion using GPT-3.5 Turbo model.
+    Call the Metaculus proxy API to generate a completion using GPT-4o model.
     
     Parameters:
     -----------
@@ -220,7 +220,7 @@ def call_perplexity(query):
         "content-type": "application/json",
     }
     payload = {
-        "model": "llama-3.1-sonar-large-128k-chat",
+        "model": "llama-3.1-sonar-huge-128k-online",
         "messages": [
             {
                 "role": "system", # this is a system prompt designed to guide the perplexity assistant
@@ -301,124 +301,234 @@ def get_model(model_name: str, metac_token: str):
 
     return None
 
-
 def main():
     """
     Main function to run the forecasting bot. This function accesses the questions
     for a given tournament, fetches information about them, and then uses an LLM
     to generate a forecast.
-
-    Parameters:
-    -----------
-    None. All relevant parameters are devined via environment variables or
-    directly in the code.
-
-    Installing dependencies
-    ----------------------
-    Install poetry: https://python-poetry.org/docs/#installing-with-pipx.
-    Then run `poetry install` in your terminal.
-
-    Environment variables
-    ----------------------
-
-    You need to have a .env file with all required environment variables.
-
-    Alternatively, if you're running the bot via github actions, you can set
-    the environment variables in the repository settings.
-    (Settings -> Secrets and variables -> Actions). Set API keys as secrets and
-    things like the tournament id as variables.
-
-    When using an .env file, the environment variables should be specified in the following format:
-    METACULUS_TOKEN=1234567890
-
-    The following environment variables are important:
-    - METACULUS_TOKEN: your metaculus API token (go to https://www.metaculus.com/aib/ to get one)
-    - OPENAI_API_KEY: your openai API key
-    - ANTHROPIC_API_KEY: your anthropic API key
-    - PERPLEXITY_API_KEY: your perplexity API key
-
-    Running the bot
-    ----------------------
-    Run this bot using `poetry run python simple-forecast-bot.py`.
-    By default, the bot will not submit any predictions. You need to change that
-    setting in the code.
     """
-
-    # define bot parameters
+    
+    # Define bot parameters
     use_perplexity = True
     submit_predictions = False
     metac_token = config("METACULUS_TOKEN")
     metac_base_url = "https://www.metaculus.com/api2"
     tournament_id = 32506
     llm_model_name = "gpt-4o"
-
-    all_questions = []
+    
     offset = 0
+    questions = list_questions(metac_base_url, metac_token, tournament_id, offset=offset)
+    
+    if not questions:
+        print("No questions found.")
+        return
+    
+    question = questions[0]  # You can also specify an index or criteria here
+    print("Forecasting ", question["id"], question["question"]["title"])
 
-    # get all questions in the tournament and add them to the all_questions list
-    while True:
-        questions = list_questions(
-            metac_base_url, metac_token, tournament_id, offset=offset
-        )
-        if len(questions) < 1:
-            break # break the while loop if there are no more questions to process
-        offset += len(questions) # update the offset for the next batch of questions
-        all_questions.extend(questions)
+    # all_questions = []
+    # offset = 0
 
-    for question in all_questions:
-        print("Forecasting ", question["id"], question["question"]["title"])
+    # # Get all questions in the tournament
+    # while True:
+    #     questions = list_questions(metac_base_url, metac_token, tournament_id, offset=offset)
+    #     if len(questions) < 1:
+    #         break
+    #     offset += len(questions) # Update the offset for the next batch
+    #     all_questions.extend(questions)
 
-        # get news info from perplexity if the user wants to use it
-        news_summary = call_perplexity(question["question"]["title"]) if use_perplexity else None
+    # # Process each question
+    # for question in all_questions:
 
-        prompt = build_prompt(
-            question["question"]["title"],
-            question["question"]["description"],
-            question["question"].get("resolution_criteria", ""),
-            question["question"].get("fine_print", ""),
-            news_summary,
-        )
+        # Get news summary from Perplexity if enabled
+    news_summary = call_perplexity(question["question"]["title"]) if use_perplexity else None
 
-        print(
-            f"\n\n*****\nPrompt for question {question['id']}/{question['question']['title']}:\n{prompt} \n\n\n\n"
-        )
+        # Build prompt
+    prompt = build_prompt(
+        question["question"]["title"],
+        question["question"]["description"],
+        question["question"].get("resolution_criteria", ""),
+        question["question"].get("fine_print", ""),
+        news_summary,
+    )
 
-        # get the language model to be used based on the name of the model
-        llm_model = get_model(llm_model_name, metac_token)
-        # make a call to the language model
+    print(f"\n\n*****\nPrompt for question {question['id']}/{question['question']['title']}:\n{prompt}\n\n")
+
+        # Initialize variables to store predictions and rationale
+    predictions = []
+    rationales = []
+
+        # Get the language model to be used based on the name
+    llm_model = get_model(llm_model_name, metac_token)
+
+        # Generate 5 predictions
+    for _ in range(5):
         response = llm_model(prompt)
-
         llm_prediction = process_forecast_probability(response)
-        rationale = response
+        if llm_prediction is not None:
+            predictions.append(llm_prediction)
+            print(f"Prediction from which the average is calculated is {predictions} %")
+        rationales.append(response)
 
-        print(f"LLM Response for question {question['id']}:\n{response}")
+        # Calculate the average of the 5 predictions
+    if predictions:
+        average_prediction = sum(predictions) / len(predictions)
+        print(f"Average prediction for question {question['id']}: {average_prediction}")
 
-        if llm_prediction is not None and submit_predictions:
-
-            # post prediction
+        if submit_predictions:
+                # Post the average prediction
             post_url = f"{metac_base_url}/questions/{question['id']}/predict/"
             response = requests.post(
                 post_url,
-                json={"prediction": float(llm_prediction) / 100},
+                json={"prediction": float(average_prediction) / 100},
                 headers={"Authorization": f"Token {metac_token}"},
             )
             response.raise_for_status()
 
-            # post comment with rationale
-            rationale = rationale + "\n\n" + "Used the following information from perplexity:\n\n" + news_summary
-            comment_url = f"{metac_base_url}/comments/" # this is the url for the comments endpoint
+                # Post a comment with a consolidated rationale
+                # Use the first rationale and append Perplexity information if available
+            consolidated_rationale = rationales[0]  # Using the first rationale
+            if news_summary:
+                consolidated_rationale += "\n\nUsed the following information from Perplexity:\n\n" + news_summary
+                
+            comment_url = f"{metac_base_url}/comments/"
             response = requests.post(
                 comment_url,
                 json={
-                    "comment_text": rationale,
-                    "submit_type": "N", # submit this as a private note
+                    "comment_text": consolidated_rationale,
+                    "submit_type": "N",  # Submit this as a private note
                     "include_latest_prediction": True,
                     "question": question["id"],
                 },
-                headers={"Authorization": f"Token {metac_token}"}, # your token is used to authenticate the request
+                headers={"Authorization": f"Token {metac_token}"},
             )
+            response.raise_for_status()
 
-            print(f"Posted prediction for {question['id']}")
+            print(f"Posted prediction and comment for question {question['id']}")
 
 if __name__ == "__main__":
     main()
+
+
+# def main():
+# """
+#     Main function to run the forecasting bot. This function accesses the questions
+#     for a given tournament, fetches information about them, and then uses an LLM
+#     to generate a forecast.
+
+#     Parameters:
+#     -----------
+#     None. All relevant parameters are devined via environment variables or
+#     directly in the code.
+
+#     Installing dependencies
+#     ----------------------
+#     Install poetry: https://python-poetry.org/docs/#installing-with-pipx.
+#     Then run `poetry install` in your terminal.
+
+#     Environment variables
+#     ----------------------
+
+#     You need to have a .env file with all required environment variables.
+
+#     Alternatively, if you're running the bot via github actions, you can set
+#     the environment variables in the repository settings.
+#     (Settings -> Secrets and variables -> Actions). Set API keys as secrets and
+#     things like the tournament id as variables.
+
+#     When using an .env file, the environment variables should be specified in the following format:
+#     METACULUS_TOKEN=1234567890
+
+#     The following environment variables are important:
+#     - METACULUS_TOKEN: your metaculus API token (go to https://www.metaculus.com/aib/ to get one)
+#     - OPENAI_API_KEY: your openai API key
+#     - ANTHROPIC_API_KEY: your anthropic API key
+#     - PERPLEXITY_API_KEY: your perplexity API key
+
+#     Running the bot
+#     ----------------------
+#     Run this bot using `poetry run python simple-forecast-bot.py`.
+#     By default, the bot will not submit any predictions. You need to change that
+#     setting in the code.
+
+#     """
+
+#     # define bot parameters
+#     use_perplexity = True
+#     submit_predictions = False
+#     metac_token = config("METACULUS_TOKEN")
+#     metac_base_url = "https://www.metaculus.com/api2"
+#     tournament_id = 32506
+#     llm_model_name = "gpt-4o"
+
+#     all_questions = []
+#     offset = 0
+
+#     # get all questions in the tournament and add them to the all_questions list
+#     while True:
+#         questions = list_questions(
+#             metac_base_url, metac_token, tournament_id, offset=offset
+#         )
+#         if len(questions) < 1:
+#             break # break the while loop if there are no more questions to process
+#         offset += len(questions) # update the offset for the next batch of questions
+#         all_questions.extend(questions)
+
+#     for question in all_questions:
+#         print("Forecasting ", question["id"], question["question"]["title"])
+
+#         # get news info from perplexity if the user wants to use it
+#         news_summary = call_perplexity(question["question"]["title"]) if use_perplexity else None
+
+#         prompt = build_prompt(
+#             question["question"]["title"],
+#             question["question"]["description"],
+#             question["question"].get("resolution_criteria", ""),
+#             question["question"].get("fine_print", ""),
+#             news_summary,
+#         )
+
+#         print(
+#             f"\n\n*****\nPrompt for question {question['id']}/{question['question']['title']}:\n{prompt} \n\n\n\n"
+#         )
+
+#         # get the language model to be used based on the name of the model
+#         llm_model = get_model(llm_model_name, metac_token)
+#         # make a call to the language model
+#         response = llm_model(prompt)
+
+#         llm_prediction = process_forecast_probability(response)
+#         rationale = response
+
+#         print(f"LLM Response for question {question['id']}:\n{response}")
+
+#         if llm_prediction is not None and submit_predictions:
+
+#             # post prediction
+#             post_url = f"{metac_base_url}/questions/{question['id']}/predict/"
+#             response = requests.post(
+#                 post_url,
+#                 json={"prediction": float(llm_prediction) / 100},
+#                 headers={"Authorization": f"Token {metac_token}"},
+#             )
+#             response.raise_for_status()
+
+# #             # post comment with rationale
+# #             rationale = rationale + "\n\n" + "Used the following information from perplexity:\n\n" + news_summary
+# #             comment_url = f"{metac_base_url}/comments/" # this is the url for the comments endpoint
+# #             response = requests.post(
+# #                 comment_url,
+# #                 json={
+# #                     "comment_text": rationale,
+# #                     "submit_type": "N", # submit this as a private note
+# #                     "include_latest_prediction": True,
+# #                     "question": question["id"],
+# #                 },
+# #                 headers={"Authorization": f"Token {metac_token}"}, # your token is used to authenticate the request
+# #             )
+
+# #             print(f"Posted prediction for {question['id']}")
+
+# # if __name__ == "__main__":
+#     main()
+
