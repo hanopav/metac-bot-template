@@ -357,7 +357,8 @@ def main():
     
     # Define bot parameters
     use_perplexity = True
-    submit_predictions = True
+    submit_predictions = False
+    loading_processed_questions = False # Keep as False until ready for deployment - testing as True will result (with submit_prediction as True) in new questions being flagged as processed and not attempted to predict on.
     metac_token = config("METACULUS_TOKEN")
     metac_base_url = "https://www.metaculus.com/api2"
     tournament_id = 32506
@@ -365,7 +366,9 @@ def main():
     
     all_questions = []
     offset = 0
-    processed_questions = load_processed_questions()
+
+    if loading_processed_questions:
+        processed_questions = load_processed_questions()
 
     # Fetch all questions in batches (pagination mechanism)
     while True:
