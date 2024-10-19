@@ -2,7 +2,7 @@ name: Daily Build Simple Bot
 
 on:
   schedule:
-    - cron: "7 20 * * *" # every day, 17:15 GMT
+    - cron: "15 20 * * *" # every day, 17:15 GMT
 
 # Daily job to run the simple forecast bot
 jobs:
