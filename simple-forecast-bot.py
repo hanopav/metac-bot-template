@@ -2,7 +2,8 @@
 #!/usr/bin/env python
 
 import json
-
+import os
+import time
 import requests
 from decouple import config
 import datetime
@@ -16,6 +17,41 @@ from llama_index.llms.openai import OpenAI
 # Note: To understand this code, it may be easiest to start with the `main()`
 # function and read the code that is called from there.
 
+CHECKPOINT_FILE = "processed_questions.json"
+MAX_RETRIES = 3
+BACKOFF_FACTOR = 2
+
+def load_processed_questions():
+    """Load the list of processed question IDs from a JSON file."""
+    if os.path.exists(CHECKPOINT_FILE):
+        with open(CHECKPOINT_FILE, "r") as file:
+            return json.load(file)
+    return []
+
+def save_processed_question(question_id):
+    """Save a processed question ID to the JSON file."""
+    processed_questions = load_processed_questions()
+    if question_id not in processed_questions:
+        processed_questions.append(question_id)
+        with open(CHECKPOINT_FILE, "w") as file:
+            json.dump(processed_questions, file)
+
+def retry_request(func, *args, **kwargs):
+    """Retry mechanism to retry API requests on failure."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = func(*args, **kwargs)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                wait_time = BACKOFF_FACTOR ** (attempt - 1)
+                print(f"Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                print("Max retries reached. Skipping this request.")
+                return None
 
 def build_prompt(
         title: str,
@@ -241,12 +277,23 @@ You do not produce forecasts yourself.
             },
         ],
     }
-    response = requests.post(url=url, json=payload, headers=headers)
-    response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
-    print(f"Response: \n{content}")
-    return content
 
+        # Use the retry mechanism for API requests
+    response = retry_request(requests.post, url, json=payload, headers=headers)
+    if response is not None:
+        content = response.json()["choices"][0]["message"]["content"]
+        return content
+    return None  # If retries failed, return None
+
+def summarize_rationales(rationales):
+    
+    metac_token = config("METACULUS_TOKEN")
+    # Build a prompt to summarize the rationales
+    summarization_prompt = (f"Summarize the following 5 rationales into a 4 to 6 bulletpoints (for all the 5 rationales combined) with the most noteworthy information repeated in most of the rationales: \n\n" + "\n\n".join(rationales))
+                    
+    # Call the LLM to generate the summary
+    summary_response = get_model("gpt-4o", metac_token)(summarization_prompt)
+    return summary_response   
 
 def get_model(model_name: str, metac_token: str):
     """
@@ -310,225 +357,124 @@ def main():
     
     # Define bot parameters
     use_perplexity = True
-    submit_predictions = False
+    submit_predictions = True
     metac_token = config("METACULUS_TOKEN")
     metac_base_url = "https://www.metaculus.com/api2"
     tournament_id = 32506
     llm_model_name = "gpt-4o"
     
+    all_questions = []
     offset = 0
-    questions = list_questions(metac_base_url, metac_token, tournament_id, offset=offset)
-    
-    if not questions:
-        print("No questions found.")
-        return
-    
-    question = questions[0]  # You can also specify an index or criteria here
-    print("Forecasting ", question["id"], question["question"]["title"])
+    processed_questions = load_processed_questions()
 
-    # all_questions = []
-    # offset = 0
+    # Fetch all questions in batches (pagination mechanism)
+    while True:
+        questions = list_questions(metac_base_url, metac_token, tournament_id, offset=offset)
+        
+        # Debugging: Check how many questions are fetched and current offset
+        print(f"Fetched {len(questions)} questions with offset {offset}")
 
-    # # Get all questions in the tournament
-    # while True:
-    #     questions = list_questions(metac_base_url, metac_token, tournament_id, offset=offset)
-    #     if len(questions) < 1:
-    #         break
-    #     offset += len(questions) # Update the offset for the next batch
-    #     all_questions.extend(questions)
+        if len(questions) < 1:
+            print("No more questions to fetch, breaking loop.")
+            break
 
-    # # Process each question
-    # for question in all_questions:
+        # Update the offset to fetch the next batch of questions
+        offset += len(questions)
+        all_questions.extend(questions)
+
+    # Process each question
+    for question in all_questions:
+        if question["id"] in processed_questions:
+            print(f"Skipping question ID {question['id']} (already processed)")
+            continue
+        print("Forecasting ", question["id"], question["question"]["title"])
 
         # Get news summary from Perplexity if enabled
-    news_summary = call_perplexity(question["question"]["title"]) if use_perplexity else None
+        news_summary = call_perplexity(question["question"]["title"]) if use_perplexity else None
 
         # Build prompt
-    prompt = build_prompt(
-        question["question"]["title"],
-        question["question"]["description"],
-        question["question"].get("resolution_criteria", ""),
-        question["question"].get("fine_print", ""),
-        news_summary,
-    )
+        prompt = build_prompt(
+            question["question"]["title"],
+            question["question"]["description"],
+            question["question"].get("resolution_criteria", ""),
+            question["question"].get("fine_print", ""),
+            news_summary,
+        )
 
-    print(f"\n\n*****\nPrompt for question {question['id']}/{question['question']['title']}:\n{prompt}\n\n")
+        print(f"\n\n*****\nPrompt for question {question['id']}/{question['question']['title']}:\n{prompt}\n\n")
 
         # Initialize variables to store predictions and rationale
-    predictions = []
-    rationales = []
+        predictions = []
+        rationales = []
 
         # Get the language model to be used based on the name
-    llm_model = get_model(llm_model_name, metac_token)
+        llm_model = get_model(llm_model_name, metac_token)
 
-        # Generate 5 predictions
-    for _ in range(5):
-        response = llm_model(prompt)
-        llm_prediction = process_forecast_probability(response)
-        if llm_prediction is not None:
-            predictions.append(llm_prediction)
-            print(f"Prediction from which the average is calculated is {predictions} %")
-        rationales.append(response)
+        # Generate 5 predictions for each question
+        for i in range(5):
+            try:
+                response = llm_model(prompt)
+                llm_prediction = process_forecast_probability(response)
+                if llm_prediction is not None:
+                    predictions.append(llm_prediction)
+                    print(f"Prediction from run {i+1}: {llm_prediction}%")
+                rationales.append(f"Run {i+1}: {response}")
+
+            except Exception as e:
+                print(f"Error generating prediction {i+1}: {e}")
+                continue
+
+        # Check if we have collected enough predictions
+        if len(predictions) < 5:
+            print(f"Only {len(predictions)} predictions collected for question {question['id']}. Skipping submission.")
+            continue
 
         # Calculate the average of the 5 predictions
-    if predictions:
         average_prediction = sum(predictions) / len(predictions)
-        print(f"Average prediction for question {question['id']}: {average_prediction}")
+        print(f"Average prediction for question {question['id']}: {average_prediction}%")
+
+        # Ensure the average is a percentage (not a decimal)
+        formatted_average_prediction = float(average_prediction)  # Keep it as a percentage
 
         if submit_predictions:
+            try:
                 # Post the average prediction
-            post_url = f"{metac_base_url}/questions/{question['id']}/predict/"
-            response = requests.post(
-                post_url,
-                json={"prediction": float(average_prediction) / 100},
-                headers={"Authorization": f"Token {metac_token}"},
-            )
-            response.raise_for_status()
+                post_url = f"{metac_base_url}/questions/{question['id']}/predict/"
+                response = requests.post(
+                    post_url,
+                    json={"prediction": formatted_average_prediction / 100},  # Submit as a decimal value
+                    headers={"Authorization": f"Token {metac_token}"},
+                )
+                response.raise_for_status()
 
-                # Post a comment with a consolidated rationale
-                # Use the first rationale and append Perplexity information if available
-            consolidated_rationale = rationales[0]  # Using the first rationale
-            if news_summary:
-                consolidated_rationale += "\n\nUsed the following information from Perplexity:\n\n" + news_summary
-                
-            comment_url = f"{metac_base_url}/comments/"
-            response = requests.post(
-                comment_url,
-                json={
-                    "comment_text": consolidated_rationale,
-                    "submit_type": "N",  # Submit this as a private note
-                    "include_latest_prediction": True,
-                    "question": question["id"],
-                },
-                headers={"Authorization": f"Token {metac_token}"},
-            )
-            response.raise_for_status()
+                if len(rationales) == 5:
+                # Summarize the rationales if more than one is collected
+                    consolidated_rationale = summarize_rationales(rationales)
 
-            print(f"Posted prediction and comment for question {question['id']}")
+                if news_summary:
+                    consolidated_rationale += "\n\nUsed the following information from Perplexity:\n\n" + news_summary
+
+                print(f"This is the consolidated rationale: {consolidated_rationale}")
+
+                comment_url = f"{metac_base_url}/comments/"
+                response = requests.post(
+                    comment_url,
+                    json={
+                        "comment_text": consolidated_rationale,
+                        "submit_type": "N",  # Submit this as a private note
+                        "include_latest_prediction": True,
+                        "question": question["id"],
+                    },
+                    headers={"Authorization": f"Token {metac_token}"},
+                )
+                response.raise_for_status()
+
+                print(f"Posted prediction and comment for question {question['id']} \n\n")
+
+                save_processed_question(question["id"])
+
+            except Exception as e:
+                print(f"Error posting prediction or comment: {e}")
 
 if __name__ == "__main__":
     main()
-
-
-# def main():
-# """
-#     Main function to run the forecasting bot. This function accesses the questions
-#     for a given tournament, fetches information about them, and then uses an LLM
-#     to generate a forecast.
-
-#     Parameters:
-#     -----------
-#     None. All relevant parameters are devined via environment variables or
-#     directly in the code.
-
-#     Installing dependencies
-#     ----------------------
-#     Install poetry: https://python-poetry.org/docs/#installing-with-pipx.
-#     Then run `poetry install` in your terminal.
-
-#     Environment variables
-#     ----------------------
-
-#     You need to have a .env file with all required environment variables.
-
-#     Alternatively, if you're running the bot via github actions, you can set
-#     the environment variables in the repository settings.
-#     (Settings -> Secrets and variables -> Actions). Set API keys as secrets and
-#     things like the tournament id as variables.
-
-#     When using an .env file, the environment variables should be specified in the following format:
-#     METACULUS_TOKEN=1234567890
-
-#     The following environment variables are important:
-#     - METACULUS_TOKEN: your metaculus API token (go to https://www.metaculus.com/aib/ to get one)
-#     - OPENAI_API_KEY: your openai API key
-#     - ANTHROPIC_API_KEY: your anthropic API key
-#     - PERPLEXITY_API_KEY: your perplexity API key
-
-#     Running the bot
-#     ----------------------
-#     Run this bot using `poetry run python simple-forecast-bot.py`.
-#     By default, the bot will not submit any predictions. You need to change that
-#     setting in the code.
-
-#     """
-
-#     # define bot parameters
-#     use_perplexity = True
-#     submit_predictions = False
-#     metac_token = config("METACULUS_TOKEN")
-#     metac_base_url = "https://www.metaculus.com/api2"
-#     tournament_id = 32506
-#     llm_model_name = "gpt-4o"
-
-#     all_questions = []
-#     offset = 0
-
-#     # get all questions in the tournament and add them to the all_questions list
-#     while True:
-#         questions = list_questions(
-#             metac_base_url, metac_token, tournament_id, offset=offset
-#         )
-#         if len(questions) < 1:
-#             break # break the while loop if there are no more questions to process
-#         offset += len(questions) # update the offset for the next batch of questions
-#         all_questions.extend(questions)
-
-#     for question in all_questions:
-#         print("Forecasting ", question["id"], question["question"]["title"])
-
-#         # get news info from perplexity if the user wants to use it
-#         news_summary = call_perplexity(question["question"]["title"]) if use_perplexity else None
-
-#         prompt = build_prompt(
-#             question["question"]["title"],
-#             question["question"]["description"],
-#             question["question"].get("resolution_criteria", ""),
-#             question["question"].get("fine_print", ""),
-#             news_summary,
-#         )
-
-#         print(
-#             f"\n\n*****\nPrompt for question {question['id']}/{question['question']['title']}:\n{prompt} \n\n\n\n"
-#         )
-
-#         # get the language model to be used based on the name of the model
-#         llm_model = get_model(llm_model_name, metac_token)
-#         # make a call to the language model
-#         response = llm_model(prompt)
-
-#         llm_prediction = process_forecast_probability(response)
-#         rationale = response
-
-#         print(f"LLM Response for question {question['id']}:\n{response}")
-
-#         if llm_prediction is not None and submit_predictions:
-
-#             # post prediction
-#             post_url = f"{metac_base_url}/questions/{question['id']}/predict/"
-#             response = requests.post(
-#                 post_url,
-#                 json={"prediction": float(llm_prediction) / 100},
-#                 headers={"Authorization": f"Token {metac_token}"},
-#             )
-#             response.raise_for_status()
-
-# #             # post comment with rationale
-# #             rationale = rationale + "\n\n" + "Used the following information from perplexity:\n\n" + news_summary
-# #             comment_url = f"{metac_base_url}/comments/" # this is the url for the comments endpoint
-# #             response = requests.post(
-# #                 comment_url,
-# #                 json={
-# #                     "comment_text": rationale,
-# #                     "submit_type": "N", # submit this as a private note
-# #                     "include_latest_prediction": True,
-# #                     "question": question["id"],
-# #                 },
-# #                 headers={"Authorization": f"Token {metac_token}"}, # your token is used to authenticate the request
-# #             )
-
-# #             print(f"Posted prediction for {question['id']}")
-
-# # if __name__ == "__main__":
-#     main()
-
