@@ -2,7 +2,7 @@ name: Daily Build Simple Bot
 
 on:
   schedule:
-    - cron: "15 17 * * *" # every day, 17:15 UTC - cron runs in UTC, and I am aiming for UTC+1 timezone - thus the result is 18:15 CET
+    - cron: "30 16 * * *" # every day, 17:15 UTC - cron runs in UTC, and I am aiming for UTC+1 timezone - thus the result is 18:15 CET
 
 # Daily job to run the simple forecast bot
 jobs:
